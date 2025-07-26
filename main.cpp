@@ -22,7 +22,7 @@ struct Vector2 {
     Vector2() = default;
     Vector2(float xVal, float yVal) : x{xVal}, y{yVal} {}
 
-    // Hidden friend operators for symmetry per SonarQube
+    // Hidden friend operators for symmetry and SonarQube compliance
     friend Vector2 operator+(const Vector2& lhs, const Vector2& rhs) {
         return Vector2(lhs.x + rhs.x, lhs.y + rhs.y);
     }
@@ -63,7 +63,7 @@ struct RigidBody {
     RigidBody(float x, float y, float m = 1.0f, bool isStaticIn = false)
         : position{x, y}
         , mass{m}
-        , isStatic{isStaticIn} // reordered to match member decl order
+        , isStatic{isStaticIn} // reordered to match member declaration order
     {
     }
 
@@ -112,7 +112,6 @@ public:
     }
 
     void update() {
-        // Use const ref where no modification to shared_ptr is needed
         for (const auto& body : bodies) {
             if (!body->isStatic) {
                 body->applyGravity();
@@ -139,7 +138,7 @@ public:
         }
     }
 
-    void resolveCollision(RigidBody& a, RigidBody& b) {
+    void resolveCollision(RigidBody& a, RigidBody& b) const {  // Marked const as requested
         Vector2 normal = b.position - a.position;
         normal.normalize();
 
@@ -147,10 +146,9 @@ public:
         float velocityAlongNormal = relativeVelocity.dot(normal);
 
         if (velocityAlongNormal > 0)
-            return; // Ignore if separating
+            return; // Ignore if they are separating
 
-        // Coefficient of restitution (elasticity)
-        constexpr float e = 1.0f;  // Perfectly elastic for now
+        constexpr float e = 1.0f;  // Perfectly elastic collision
 
         float j = -(1 + e) * velocityAlongNormal;
         j /= (1 / a.mass + 1 / b.mass);
