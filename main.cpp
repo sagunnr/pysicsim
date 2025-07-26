@@ -4,15 +4,13 @@
 #include <memory>
 #include <algorithm>
 
-constexpr float GRAVITY = 9.8f;   // Gravity constant
-constexpr float FPS = 60.0f;      // Frames per second
-constexpr float TIME_STEP = 1.0f / FPS;  // Time step per frame
+constexpr float GRAVITY = 9.8f;        // Gravity constant
+constexpr float FPS = 60.0f;           // Frames per second
+constexpr float TIME_STEP = 1.0f / FPS; // Time step per frame
+constexpr float FRICTION_COEFFICIENT = 0.5f; // Friction coefficient
 
 // Utility functions
-inline float sqr(float x) 
-{ 
-    return x * x; 
-}
+inline float sqr(float x) { return x * x; }
 
 // Vector2 class for positions, velocities, and forces
 struct Vector2 {
@@ -22,7 +20,7 @@ struct Vector2 {
     Vector2() = default;
     Vector2(float xVal, float yVal) : x{xVal}, y{yVal} {}
 
-    // Hidden friend operators for symmetry and SonarQube compliance
+    // Friend operators for symmetry
     friend Vector2 operator+(const Vector2& lhs, const Vector2& rhs) {
         return Vector2(lhs.x + rhs.x, lhs.y + rhs.y);
     }
@@ -57,15 +55,13 @@ struct RigidBody {
     Vector2 position;
     float mass;
     bool isStatic;
-    Vector2 velocity{};  // moved to in-class initializer
-    Vector2 force{};     // moved to in-class initializer
+    Vector2 velocity{};  // In-class initializer
+    Vector2 force{};     // In-class initializer
 
     RigidBody(float x, float y, float m = 1.0f, bool isStaticIn = false)
         : position{x, y}
         , mass{m}
-        , isStatic{isStaticIn} // reordered to match member declaration order
-    {
-    }
+        , isStatic{isStaticIn} {}
 
     void applyForce(const Vector2& f) {
         force = force + f;
@@ -74,6 +70,18 @@ struct RigidBody {
     void applyGravity() {
         if (!isStatic)
             applyForce({0, GRAVITY * mass});
+    }
+
+    void applyFriction(const Vector2& normal) {
+        if (!isStatic) {
+            Vector2 velocityAlongNormal = velocity * normal;
+            float frictionMagnitude = FRICTION_COEFFICIENT * mass * GRAVITY; // Simple friction model
+
+            if (velocityAlongNormal.length() > 0) {
+                Vector2 frictionForce = normal * -frictionMagnitude * (velocityAlongNormal.length() / velocityAlongNormal.length());
+                applyForce(frictionForce);
+            }
+        }
     }
 
     void integrate() {
@@ -128,17 +136,21 @@ public:
                 // AABB vs AABB (simplified, assuming they are rectangular)
                 if (checkAABBCollision(*bodyA, *bodyB, 50, 50, 50, 50)) {
                     resolveCollision(*bodyA, *bodyB);
+                    bodyA->applyFriction({1, 0}); // Apply friction in X direction (simplified)
+                    bodyB->applyFriction({1, 0});
                 }
 
                 // Circle vs Circle
                 if (checkCircleCollision(*bodyA, *bodyB, 25, 25)) {
                     resolveCollision(*bodyA, *bodyB);
+                    bodyA->applyFriction({1, 0});
+                    bodyB->applyFriction({1, 0});
                 }
             }
         }
     }
 
-    void resolveCollision(RigidBody& a, RigidBody& b) const {  // Marked const as requested
+    void resolveCollision(RigidBody& a, RigidBody& b) const {
         Vector2 normal = b.position - a.position;
         normal.normalize();
 
@@ -163,10 +175,13 @@ public:
         debugVisualizationEnabled = !debugVisualizationEnabled;
     }
 
-    void debugDraw() const { // marked const
+    void debugDraw() const {
         if (debugVisualizationEnabled) {
             for (const auto& body : bodies) {
                 std::cout << "Body at position: (" << body->position.x << ", " << body->position.y << ")\n";
+                // Visualization of forces, etc.
+                std::cout << "Velocity: (" << body->velocity.x << ", " << body->velocity.y << ")\n";
+                std::cout << "Force: (" << body->force.x << ", " << body->force.y << ")\n";
             }
         }
     }
