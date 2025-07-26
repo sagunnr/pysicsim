@@ -47,6 +47,11 @@ struct Vector2 {
         return Vector2(lhs.x / scalar, lhs.y / scalar);
     }
 
+    // Component-wise multiplication of two Vector2's
+    friend Vector2 operator*(const Vector2& lhs, const Vector2& rhs) {
+        return Vector2(lhs.x * rhs.x, lhs.y * rhs.y);
+    }
+
     float dot(const Vector2& other) const {
         return x * other.x + y * other.y;
     }
@@ -54,7 +59,7 @@ struct Vector2 {
     float length() const {
         return std::sqrt(x * x + y * y);
     }
-    
+
     void normalize() {
         float len = length();
         if (len > 0) {
