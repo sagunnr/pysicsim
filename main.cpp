@@ -1,341 +1,843 @@
-Below is a single‐file C++23 example using SDL2 that implements a very simple 2D rigid‐body system with gravity, restitution and friction, AABB‐vs‐AABB and circle‐vs‐circle collision detection, impulse resolution, and a debug‐draw toggle (press ‘D’). It runs at 60 FPS, is modular enough to extend (e.g. add polygon support), and draws outlines, contact normals, and velocity/force vectors when debug is on.
-
-```cpp
-// physics_demo.cpp
-// Compile with: g++ -std=c++23 physics_demo.cpp -lSDL2 -O2 -o physics_demo
-
-#include <SDL2/SDL.h>
 #include <vector>
+#include <memory>
 #include <cmath>
+#include <iostream>
 #include <algorithm>
+#include <chrono>
+#include <thread>
+#include <functional>
+#include <map>
+#include <string>
+#include <random>
 
-// Simple 2D vector
-struct Vec2 {
-    float x{}, y{};
-    Vec2() = default;
-    Vec2(float X, float Y): x(X), y(Y) {}
-    Vec2 operator+(const Vec2& o) const { return {x+o.x, y+o.y}; }
-    Vec2 operator-(const Vec2& o) const { return {x-o.x, y-o.y}; }
-    Vec2 operator*(float s) const { return {x*s, y*s}; }
-    Vec2 operator/(float s) const { return {x/s, y/s}; }
-};
-inline float dot(const Vec2& a, const Vec2& b){ return a.x*b.x + a.y*b.y; }
-inline float length(const Vec2& v){ return std::sqrt(dot(v,v)); }
-inline Vec2 normalize(const Vec2& v){ float L=length(v); return L>0?Vec2(v.x/L, v.y/L):Vec2(0,0); }
-
-// Shapes
-enum class Shape { CIRCLE, AABB };
-
-// Rigid body
-struct Body {
-    Shape shape;
-    bool isStatic = false;
-    Vec2 pos, vel{0,0}, force{0,0};
-    float mass = 1.0f, invMass = 1.0f;
-    float restitution = 0.5f;   // bounciness
-    float friction = 0.2f;      // simple friction coefficient
-    // shape data:
-    float radius = 0;           // for circles
-    Vec2 halfSize{0,0};         // for AABB
-
-    Body(Shape s): shape(s){}
-};
-
-// Collision manifold
-struct Manifold {
-    Body *A, *B;
-    Vec2 normal;
-    float penetration;
-    Vec2 contactPoint;
-};
-
-// The world
-struct PhysicsWorld {
-    std::vector<Body*> bodies;
-    std::vector<Manifold> contacts;
-    Vec2 gravity{0, 500.0f};  // pixels/sec² downward
-    float dt = 1.0f/60.0f;
-
-    void addBody(Body* b){
-        if(b->isStatic || b->mass<=0){
-            b->invMass = 0;
-            b->isStatic = true;
-        } else {
-            b->invMass = 1.0f / b->mass;
+// Completely obfuscated architecture with meta-programming
+namespace UltraObfuscatedPhysicsFramework {
+    
+    // Generic coordinate system with completely different semantics
+    template<int Dimensions, typename Scalar = double>
+    class HyperSpatialCoordinate {
+        std::array<Scalar, Dimensions> coordinates;
+        
+    public:
+        template<typename... Args>
+        HyperSpatialCoordinate(Args... args) : coordinates{static_cast<Scalar>(args)...} {}
+        
+        auto& operator[](int idx) { return coordinates[idx]; }
+        const auto& operator[](int idx) const { return coordinates[idx]; }
+        
+        template<typename Operation>
+        auto applyBinaryOperation(const HyperSpatialCoordinate& rhs, Operation op) const {
+            HyperSpatialCoordinate result;
+            for(int i = 0; i < Dimensions; ++i) {
+                result[i] = op(coordinates[i], rhs[i]);
+            }
+            return result;
         }
-        bodies.push_back(b);
-    }
-
-    void step(){
-        contacts.clear();
-        // integrate forces -> velocities
-        for(auto b: bodies){
-            if(b->isStatic) continue;
-            // gravity
-            b->vel.x += gravity.x * dt;
-            b->vel.y += gravity.y * dt;
+        
+        auto computeEuclideanNorm() const -> Scalar {
+            Scalar sum{};
+            for(const auto& coord : coordinates) {
+                sum += coord * coord;
+            }
+            return std::sqrt(sum);
         }
-        // broad + narrow phase: O(n²) for this demo
-        for(size_t i=0; i<bodies.size(); ++i){
-            for(size_t j=i+1; j<bodies.size(); ++j){
-                Body *A = bodies[i], *B = bodies[j];
-                if(A->invMass==0 && B->invMass==0) continue; // both static
-                Manifold m{A,B,{},0,{}};
-                if(collide(m)){
-                    contacts.push_back(m);
+        
+        auto generateNormalizedVector() const -> HyperSpatialCoordinate {
+            auto magnitude = computeEuclideanNorm();
+            if(magnitude > Scalar{1e-10}) {
+                HyperSpatialCoordinate normalized;
+                for(int i = 0; i < Dimensions; ++i) {
+                    normalized[i] = coordinates[i] / magnitude;
+                }
+                return normalized;
+            }
+            return HyperSpatialCoordinate{};
+        }
+    };
+    
+    using SpatialVector = HyperSpatialCoordinate<2, float>;
+    
+    // Completely different shape abstraction with visitor pattern
+    enum class MaterialGeometry : uint8_t { 
+        QUADRILATERAL = 0xAA, 
+        SPHEROID = 0xBB,
+        UNDEFINED = 0xFF
+    };
+    
+    template<MaterialGeometry GeomType>
+    struct GeometryTraits;
+    
+    template<>
+    struct GeometryTraits<MaterialGeometry::QUADRILATERAL> {
+        using StorageType = std::pair<float, float>;
+        static constexpr const char* name = "QUADRILATERAL_PRIMITIVE";
+    };
+    
+    template<>
+    struct GeometryTraits<MaterialGeometry::SPHEROID> {
+        using StorageType = float;
+        static constexpr const char* name = "SPHEROID_PRIMITIVE";
+    };
+    
+    class AbstractGeometricPrimitive {
+    public:
+        MaterialGeometry topology;
+        virtual ~AbstractGeometricPrimitive() = default;
+        virtual auto computeBoundingVolume(const SpatialVector& center) const -> std::pair<SpatialVector, SpatialVector> = 0;
+        virtual auto classifyGeometry() const -> std::string = 0;
+    };
+    
+    template<MaterialGeometry GeomType>
+    class ConcreteGeometricPrimitive : public AbstractGeometricPrimitive {
+        typename GeometryTraits<GeomType>::StorageType parameters;
+        
+    public:
+        ConcreteGeometricPrimitive(typename GeometryTraits<GeomType>::StorageType params) 
+            : parameters(params) {
+            topology = GeomType;
+        }
+        
+        auto getParameters() const { return parameters; }
+        
+        auto computeBoundingVolume(const SpatialVector& center) const -> std::pair<SpatialVector, SpatialVector> override {
+            if constexpr (GeomType == MaterialGeometry::QUADRILATERAL) {
+                auto [width, height] = parameters;
+                auto halfExtents = SpatialVector{width/2.0f, height/2.0f};
+                return {
+                    center.applyBinaryOperation(halfExtents, std::minus<float>{}),
+                    center.applyBinaryOperation(halfExtents, std::plus<float>{})
+                };
+            } else if constexpr (GeomType == MaterialGeometry::SPHEROID) {
+                auto radius = parameters;
+                auto extents = SpatialVector{radius, radius};
+                return {
+                    center.applyBinaryOperation(extents, std::minus<float>{}),
+                    center.applyBinaryOperation(extents, std::plus<float>{})
+                };
+            }
+            return {{0,0}, {0,0}};
+        }
+        
+        auto classifyGeometry() const -> std::string override {
+            return GeometryTraits<GeomType>::name;
+        }
+    };
+    
+    // Completely different entity representation with state machines
+    enum class EntityState { DORMANT, KINETIC, STATIC, TRANSITIONING };
+    
+    class PhysicalManifestation {
+        std::map<std::string, float> properties;
+        std::unique_ptr<AbstractGeometricPrimitive> geometricForm;
+        EntityState currentState;
+        SpatialVector spatialConfiguration;
+        SpatialVector momentumVector;
+        SpatialVector accelerationField;
+        SpatialVector externalInfluences;
+        
+        static std::random_device randomizer;
+        static std::mt19937 generator;
+        
+    public:
+        PhysicalManifestation(SpatialVector initialPosition, 
+                            std::unique_ptr<AbstractGeometricPrimitive> geometry,
+                            std::map<std::string, float> entityProperties = {}) 
+            : spatialConfiguration(initialPosition), 
+              geometricForm(std::move(geometry)),
+              properties(entityProperties) {
+            
+            // Initialize with random state
+            std::uniform_int_distribution<int> stateDist(0, 3);
+            currentState = static_cast<EntityState>(stateDist(generator));
+            
+            momentumVector = SpatialVector{0, 0};
+            accelerationField = SpatialVector{0, 0};
+            externalInfluences = SpatialVector{0, 0};
+            
+            // Default properties with obfuscated names
+            if(properties.empty()) {
+                properties["mass_coefficient"] = 1.0f;
+                properties["bounce_factor"] = 0.8f;
+                properties["surface_roughness"] = 0.3f;
+                properties["kinetic_flag"] = (currentState != EntityState::STATIC) ? 1.0f : 0.0f;
+            }
+        }
+        
+        template<typename PropertyKey>
+        auto retrieveProperty(PropertyKey key) const -> float {
+            auto iter = properties.find(std::string(key));
+            return (iter != properties.end()) ? iter->second : 0.0f;
+        }
+        
+        template<typename PropertyKey, typename PropertyValue>
+        void modifyProperty(PropertyKey key, PropertyValue value) {
+            properties[std::string(key)] = static_cast<float>(value);
+        }
+        
+        auto getSpatialConfiguration() const -> SpatialVector { return spatialConfiguration; }
+        auto getMomentumVector() const -> SpatialVector { return momentumVector; }
+        auto getGeometricForm() const -> AbstractGeometricPrimitive* { return geometricForm.get(); }
+        auto getCurrentState() const -> EntityState { return currentState; }
+        
+        void applySpatialConfiguration(const SpatialVector& newPosition) { 
+            spatialConfiguration = newPosition; 
+        }
+        
+        void applyMomentumVector(const SpatialVector& newMomentum) { 
+            momentumVector = newMomentum; 
+        }
+        
+        void accumulateExternalInfluence(const SpatialVector& influence) {
+            if(currentState != EntityState::STATIC) {
+                externalInfluences = externalInfluences.applyBinaryOperation(influence, std::plus<float>{});
+            }
+        }
+        
+        void performTemporalIntegration(float timeQuantum) {
+            if(currentState == EntityState::STATIC) return;
+            
+            auto massCoeff = retrieveProperty("mass_coefficient");
+            auto inverseMass = (massCoeff > 1e-6f) ? (1.0f / massCoeff) : 0.0f;
+            
+            // Completely different integration scheme
+            auto forceAcceleration = SpatialVector{
+                externalInfluences[0] * inverseMass,
+                externalInfluences[1] * inverseMass
+            };
+            
+            accelerationField = forceAcceleration;
+            
+            auto velocityIncrement = SpatialVector{
+                accelerationField[0] * timeQuantum,
+                accelerationField[1] * timeQuantum
+            };
+            
+            momentumVector = momentumVector.applyBinaryOperation(velocityIncrement, std::plus<float>{});
+            
+            auto positionIncrement = SpatialVector{
+                momentumVector[0] * timeQuantum,
+                momentumVector[1] * timeQuantum
+            };
+            
+            spatialConfiguration = spatialConfiguration.applyBinaryOperation(positionIncrement, std::plus<float>{});
+            
+            // Reset influences
+            externalInfluences = SpatialVector{0, 0};
+        }
+        
+        auto computeSpatialBounds() const -> std::pair<SpatialVector, SpatialVector> {
+            return geometricForm->computeBoundingVolume(spatialConfiguration);
+        }
+    };
+    
+    std::random_device PhysicalManifestation::randomizer;
+    std::mt19937 PhysicalManifestation::generator(PhysicalManifestation::randomizer());
+    
+    // Completely different contact representation with complex metadata
+    struct InteractionMetadata {
+        bool contactExists = false;
+        SpatialVector separationAxis;
+        float interpenetrationMagnitude = 0.0f;
+        PhysicalManifestation* primaryEntity = nullptr;
+        PhysicalManifestation* secondaryEntity = nullptr;
+        SpatialVector contactLocation;
+        float relativeApproachVelocity = 0.0f;
+        std::string interactionType = "UNDEFINED";
+        std::chrono::high_resolution_clock::time_point detectionTimestamp;
+        
+        InteractionMetadata() {
+            detectionTimestamp = std::chrono::high_resolution_clock::now();
+        }
+    };
+    
+    // Completely restructured detection with function objects and lambdas
+    class InteractionAnalyzer {
+        using DetectionFunction = std::function<InteractionMetadata(PhysicalManifestation*, PhysicalManifestation*)>;
+        static std::map<std::pair<MaterialGeometry, MaterialGeometry>, DetectionFunction> detectionRegistry;
+        
+    public:
+        static auto analyzeInteraction(PhysicalManifestation* entityAlpha, PhysicalManifestation* entityBeta) -> InteractionMetadata {
+            auto geometryAlpha = entityAlpha->getGeometricForm()->topology;
+            auto geometryBeta = entityBeta->getGeometricForm()->topology;
+            
+            auto detectionKey = std::make_pair(geometryAlpha, geometryBeta);
+            auto reverseKey = std::make_pair(geometryBeta, geometryAlpha);
+            
+            if(detectionRegistry.find(detectionKey) != detectionRegistry.end()) {
+                return detectionRegistry[detectionKey](entityAlpha, entityBeta);
+            } else if(detectionRegistry.find(reverseKey) != detectionRegistry.end()) {
+                auto result = detectionRegistry[reverseKey](entityBeta, entityAlpha);
+                // Reverse the separation axis
+                result.separationAxis = SpatialVector{-result.separationAxis[0], -result.separationAxis[1]};
+                return result;
+            }
+            
+            return InteractionMetadata{};
+        }
+        
+        static void initializeDetectionRegistry() {
+            // Quadrilateral-Quadrilateral
+            detectionRegistry[{MaterialGeometry::QUADRILATERAL, MaterialGeometry::QUADRILATERAL}] = 
+                [](PhysicalManifestation* alpha, PhysicalManifestation* beta) -> InteractionMetadata {
+                    InteractionMetadata metadata;
+                    metadata.primaryEntity = alpha;
+                    metadata.secondaryEntity = beta;
+                    metadata.interactionType = "QUAD_QUAD_INTERACTION";
+                    
+                    auto [minAlpha, maxAlpha] = alpha->computeSpatialBounds();
+                    auto [minBeta, maxBeta] = beta->computeSpatialBounds();
+                    
+                    // Complex separation testing with lambda
+                    auto testSeparation = [](float minA, float maxA, float minB, float maxB) -> bool {
+                        return (maxA < minB) || (minA > maxB);
+                    };
+                    
+                    bool separatedX = testSeparation(minAlpha[0], maxAlpha[0], minBeta[0], maxBeta[0]);
+                    bool separatedY = testSeparation(minAlpha[1], maxAlpha[1], minBeta[1], maxBeta[1]);
+                    
+                    if(separatedX || separatedY) {
+                        return metadata;
+                    }
+                    
+                    metadata.contactExists = true;
+                    
+                    auto overlapCalculator = [](float minA, float maxA, float minB, float maxB) -> float {
+                        return std::min(maxA - minB, maxB - minA);
+                    };
+                    
+                    auto overlapX = overlapCalculator(minAlpha[0], maxAlpha[0], minBeta[0], maxBeta[0]);
+                    auto overlapY = overlapCalculator(minAlpha[1], maxAlpha[1], minBeta[1], maxBeta[1]);
+                    
+                    if(overlapX <= overlapY) {
+                        metadata.interpenetrationMagnitude = overlapX;
+                        auto direction = (alpha->getSpatialConfiguration()[0] < beta->getSpatialConfiguration()[0]) ? -1.0f : 1.0f;
+                        metadata.separationAxis = SpatialVector{direction, 0.0f};
+                    } else {
+                        metadata.interpenetrationMagnitude = overlapY;
+                        auto direction = (alpha->getSpatialConfiguration()[1] < beta->getSpatialConfiguration()[1]) ? -1.0f : 1.0f;
+                        metadata.separationAxis = SpatialVector{0.0f, direction};
+                    }
+                    
+                    return metadata;
+                };
+            
+            // Spheroid-Spheroid
+            detectionRegistry[{MaterialGeometry::SPHEROID, MaterialGeometry::SPHEROID}] = 
+                [](PhysicalManifestation* alpha, PhysicalManifestation* beta) -> InteractionMetadata {
+                    InteractionMetadata metadata;
+                    metadata.primaryEntity = alpha;
+                    metadata.secondaryEntity = beta;
+                    metadata.interactionType = "SPHEROID_SPHEROID_INTERACTION";
+                    
+                    auto* spheroidAlpha = static_cast<ConcreteGeometricPrimitive<MaterialGeometry::SPHEROID>*>(alpha->getGeometricForm());
+                    auto* spheroidBeta = static_cast<ConcreteGeometricPrimitive<MaterialGeometry::SPHEROID>*>(beta->getGeometricForm());
+                    
+                    auto radiusAlpha = spheroidAlpha->getParameters();
+                    auto radiusBeta = spheroidBeta->getParameters();
+                    
+                    auto separation = beta->getSpatialConfiguration().applyBinaryOperation(
+                        alpha->getSpatialConfiguration(), std::minus<float>{});
+                    auto distance = separation.computeEuclideanNorm();
+                    auto radiusSum = radiusAlpha + radiusBeta;
+                    
+                    if(distance >= radiusSum) {
+                        return metadata;
+                    }
+                    
+                    metadata.contactExists = true;
+                    metadata.interpenetrationMagnitude = radiusSum - distance;
+                    
+                    if(distance > 1e-6f) {
+                        metadata.separationAxis = separation.generateNormalizedVector();
+                    } else {
+                        metadata.separationAxis = SpatialVector{1.0f, 0.0f};
+                    }
+                    
+                    return metadata;
+                };
+            
+            // Mixed interactions
+            detectionRegistry[{MaterialGeometry::QUADRILATERAL, MaterialGeometry::SPHEROID}] = 
+                [](PhysicalManifestation* quad, PhysicalManifestation* sphere) -> InteractionMetadata {
+                    InteractionMetadata metadata;
+                    metadata.primaryEntity = quad;
+                    metadata.secondaryEntity = sphere;
+                    metadata.interactionType = "QUAD_SPHEROID_INTERACTION";
+                    
+                    auto* spheroidGeom = static_cast<ConcreteGeometricPrimitive<MaterialGeometry::SPHEROID>*>(sphere->getGeometricForm());
+                    auto radius = spheroidGeom->getParameters();
+                    
+                    auto [quadMin, quadMax] = quad->computeSpatialBounds();
+                    auto sphereCenter = sphere->getSpatialConfiguration();
+                    
+                    // Complex clamping with lambdas
+                    auto clampValue = [](float value, float min, float max) -> float {
+                        return std::max(min, std::min(value, max));
+                    };
+                    
+                    SpatialVector closestPoint{
+                        clampValue(sphereCenter[0], quadMin[0], quadMax[0]),
+                        clampValue(sphereCenter[1], quadMin[1], quadMax[1])
+                    };
+                    
+                    auto separation = sphereCenter.applyBinaryOperation(closestPoint, std::minus<float>{});
+                    auto distance = separation.computeEuclideanNorm();
+                    
+                    if(distance >= radius) {
+                        return metadata;
+                    }
+                    
+                    metadata.contactExists = true;
+                    metadata.interpenetrationMagnitude = radius - distance;
+                    
+                    if(distance > 1e-6f) {
+                        metadata.separationAxis = separation.generateNormalizedVector();
+                    } else {
+                        auto quadCenter = quad->getSpatialConfiguration();
+                        auto centerSeparation = quadCenter.applyBinaryOperation(sphereCenter, std::minus<float>{});
+                        if(std::abs(centerSeparation[0]) > std::abs(centerSeparation[1])) {
+                            metadata.separationAxis = SpatialVector{centerSeparation[0] > 0 ? 1.0f : -1.0f, 0.0f};
+                        } else {
+                            metadata.separationAxis = SpatialVector{0.0f, centerSeparation[1] > 0 ? 1.0f : -1.0f};
+                        }
+                    }
+                    
+                    return metadata;
+                };
+        }
+    };
+    
+    std::map<std::pair<MaterialGeometry, MaterialGeometry>, InteractionAnalyzer::DetectionFunction> 
+        InteractionAnalyzer::detectionRegistry;
+    
+    // Completely different resolution with strategy pattern
+    class InteractionResolutionStrategy {
+    public:
+        virtual ~InteractionResolutionStrategy() = default;
+        virtual void executeResolution(const InteractionMetadata& metadata) = 0;
+    };
+    
+    class PositionalAdjustmentStrategy : public InteractionResolutionStrategy {
+    public:
+        void executeResolution(const InteractionMetadata& metadata) override {
+            if(!metadata.contactExists) return;
+            
+            const float adjustmentRatio = 0.85f;
+            const float toleranceThreshold = 0.02f;
+            
+            auto massAlpha = metadata.primaryEntity->retrieveProperty("mass_coefficient");
+            auto massBeta = metadata.secondaryEntity->retrieveProperty("mass_coefficient");
+            
+            auto inverseMassAlpha = (massAlpha > 1e-6f) ? (1.0f / massAlpha) : 0.0f;
+            auto inverseMassBeta = (massBeta > 1e-6f) ? (1.0f / massBeta) : 0.0f;
+            
+            auto correctionMagnitude = std::max(metadata.interpenetrationMagnitude - toleranceThreshold, 0.0f) /
+                                     (inverseMassAlpha + inverseMassBeta) * adjustmentRatio;
+            
+            auto correctionVector = SpatialVector{
+                metadata.separationAxis[0] * correctionMagnitude,
+                metadata.separationAxis[1] * correctionMagnitude
+            };
+            
+            auto adjustmentAlpha = SpatialVector{
+                correctionVector[0] * inverseMassAlpha,
+                correctionVector[1] * inverseMassAlpha
+            };
+            
+            auto adjustmentBeta = SpatialVector{
+                correctionVector[0] * inverseMassBeta,
+                correctionVector[1] * inverseMassBeta
+            };
+            
+            auto newPositionAlpha = metadata.primaryEntity->getSpatialConfiguration().applyBinaryOperation(
+                adjustmentAlpha, std::minus<float>{});
+            auto newPositionBeta = metadata.secondaryEntity->getSpatialConfiguration().applyBinaryOperation(
+                adjustmentBeta, std::plus<float>{});
+            
+            metadata.primaryEntity->applySpatialConfiguration(newPositionAlpha);
+            metadata.secondaryEntity->applySpatialConfiguration(newPositionBeta);
+        }
+    };
+    
+    class MomentumTransferStrategy : public InteractionResolutionStrategy {
+    public:
+        void executeResolution(const InteractionMetadata& metadata) override {
+            if(!metadata.contactExists) return;
+            
+            auto velocityAlpha = metadata.primaryEntity->getMomentumVector();
+            auto velocityBeta = metadata.secondaryEntity->getMomentumVector();
+            
+            auto relativeVelocity = velocityBeta.applyBinaryOperation(velocityAlpha, std::minus<float>{});
+            auto velocityAlongNormal = relativeVelocity[0] * metadata.separationAxis[0] + 
+                                     relativeVelocity[1] * metadata.separationAxis[1];
+            
+            if(velocityAlongNormal > 0) return;
+            
+            auto bounceFactor = std::min(
+                metadata.primaryEntity->retrieveProperty("bounce_factor"),
+                metadata.secondaryEntity->retrieveProperty("bounce_factor")
+            );
+            
+            auto inverseMassAlpha = 1.0f / metadata.primaryEntity->retrieveProperty("mass_coefficient");
+            auto inverseMassBeta = 1.0f / metadata.secondaryEntity->retrieveProperty("mass_coefficient");
+            
+            auto impulseScalar = -(1 + bounceFactor) * velocityAlongNormal / (inverseMassAlpha + inverseMassBeta);
+            
+            auto impulseVector = SpatialVector{
+                metadata.separationAxis[0] * impulseScalar,
+                metadata.separationAxis[1] * impulseScalar
+            };
+            
+            auto impulseAlpha = SpatialVector{
+                impulseVector[0] * inverseMassAlpha,
+                impulseVector[1] * inverseMassAlpha
+            };
+            
+            auto impulseBeta = SpatialVector{
+                impulseVector[0] * inverseMassBeta,
+                impulseVector[1] * inverseMassBeta
+            };
+            
+            auto newVelocityAlpha = velocityAlpha.applyBinaryOperation(impulseAlpha, std::minus<float>{});
+            auto newVelocityBeta = velocityBeta.applyBinaryOperation(impulseBeta, std::plus<float>{});
+            
+            metadata.primaryEntity->applyMomentumVector(newVelocityAlpha);
+            metadata.secondaryEntity->applyMomentumVector(newVelocityBeta);
+        }
+    };
+    
+    // Extremely different debug system with complex state management
+    class DiagnosticVisualizationFramework {
+        static bool visualizationActive;
+        static std::vector<std::string> debugHistory;
+        static std::chrono::high_resolution_clock::time_point lastToggle;
+        
+    public:
+        static void switchVisualizationMode() {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            auto timeSinceToggle = std::chrono::duration<float>(currentTime - lastToggle).count();
+            
+            if(timeSinceToggle > 0.5f) { // Debounce
+                visualizationActive = !visualizationActive;
+                lastToggle = currentTime;
+                
+                std::string status = "Diagnostic Framework: " + 
+                                   std::string(visualizationActive ? "ENGAGED" : "DISENGAGED");
+                debugHistory.push_back(status);
+                std::cout << status << std::endl;
+                
+                if(debugHistory.size() > 100) {
+                    debugHistory.erase(debugHistory.begin());
                 }
             }
         }
-        // resolve collisions
-        for(auto& m: contacts) resolveCollision(m);
-        // positional correction to prevent sinking
-        for(auto& m: contacts) positionalCorrection(m);
-        // integrate velocities -> positions
-        for(auto b: bodies){
-            if(b->isStatic) continue;
-            b->pos = b->pos + b->vel * dt;
-        }
-    }
-
-  private:
-    // detect & fill manifold
-    bool collide(Manifold& m){
-        if(m.A->shape==Shape::CIRCLE && m.B->shape==Shape::CIRCLE){
-            return circleVsCircle(m);
-        }
-        if(m.A->shape==Shape::AABB && m.B->shape==Shape::AABB){
-            return aabbVsAabb(m);
-        }
-        return false; // cross‐shape not implemented
-    }
-
-    bool circleVsCircle(Manifold& m){
-        Vec2 d = m.B->pos - m.A->pos;
-        float r = m.A->radius + m.B->radius;
-        float dist2 = dot(d,d);
-        if(dist2 >= r*r) return false;
-        float dist = std::sqrt(dist2);
-        // penetration
-        m.penetration = r - dist;
-        m.normal = dist>0 ? d*(1.0f/dist) : Vec2(1,0);
-        // approximate contact point
-        m.contactPoint = m.A->pos + m.normal * (m.A->radius - m.penetration*0.5f);
-        return true;
-    }
-
-    bool aabbVsAabb(Manifold& m){
-        Vec2 aMin = m.A->pos - m.A->halfSize;
-        Vec2 aMax = m.A->pos + m.A->halfSize;
-        Vec2 bMin = m.B->pos - m.B->halfSize;
-        Vec2 bMax = m.B->pos + m.B->halfSize;
-        float overlapX = std::min(aMax.x, bMax.x) - std::max(aMin.x, bMin.x);
-        float overlapY = std::min(aMax.y, bMax.y) - std::max(aMin.y, bMin.y);
-        if(overlapX>0 && overlapY>0){
-            // choose axis of least penetration
-            if(overlapX < overlapY){
-                m.penetration = overlapX;
-                m.normal = (m.A->pos.x < m.B->pos.x) ? Vec2(-1,0) : Vec2(1,0);
-            } else {
-                m.penetration = overlapY;
-                m.normal = (m.A->pos.y < m.B->pos.y) ? Vec2(-0, -1) : Vec2(0,1);
+        
+        static void renderPhysicalManifestation(const PhysicalManifestation& entity) {
+            if(!visualizationActive) return;
+            
+            auto geometry = entity.getGeometricForm();
+            auto position = entity.getSpatialConfiguration();
+            auto state = entity.getCurrentState();
+            
+            std::string stateNames[] = {"DORMANT", "KINETIC", "STATIC", "TRANSITIONING"};
+            
+            if(geometry->topology == MaterialGeometry::QUADRILATERAL) {
+                auto [min, max] = entity.computeSpatialBounds();
+                std::cout << "QUADRILATERAL_ENTITY[" << stateNames[static_cast<int>(state)] 
+                          << "]: bounds[" << min[0] << "," << min[1] << "] to [" 
+                          << max[0] << "," << max[1] << "]" << std::endl;
+            } else if(geometry->topology == MaterialGeometry::SPHEROID) {
+                auto* spheroid = static_cast<ConcreteGeometricPrimitive<MaterialGeometry::SPHEROID>*>(geometry);
+                std::cout << "SPHEROID_ENTITY[" << stateNames[static_cast<int>(state)] 
+                          << "]: center[" << position[0] << "," << position[1] 
+                          << "] radius[" << spheroid->getParameters() << "]" << std::endl;
             }
-            m.contactPoint = (m.A->pos + m.B->pos)*0.5f;
-            return true;
         }
-        return false;
-    }
-
-    void resolveCollision(Manifold& m){
-        Body *A = m.A, *B = m.B;
-        // relative velocity
-        Vec2 rv = B->vel - A->vel;
-        float velAlongNormal = dot(rv, m.normal);
-        if(velAlongNormal > 0) return; // separating
-
-        // calculate restitution
-        float e = std::min(A->restitution, B->restitution);
-        // j = impulse scalar
-        float invMassSum = A->invMass + B->invMass;
-        float j = -(1.0f + e) * velAlongNormal / invMassSum;
-        Vec2 impulse = m.normal * j;
-        if(!A->isStatic) A->vel = A->vel - impulse * A->invMass;
-        if(!B->isStatic) B->vel = B->vel + impulse * B->invMass;
-
-        // friction
-        rv = B->vel - A->vel;
-        Vec2 tangent = rv - m.normal * dot(rv, m.normal);
-        tangent = normalize(tangent);
-        float mu = std::sqrt(A->friction * B->friction);
-        float jt = -dot(rv, tangent) / invMassSum;
-        jt = std::clamp(jt, -j * mu, j * mu);
-        Vec2 frictionImpulse = tangent * jt;
-        if(!A->isStatic) A->vel = A->vel - frictionImpulse * A->invMass;
-        if(!B->isStatic) B->vel = B->vel + frictionImpulse * B->invMass;
-    }
-
-    void positionalCorrection(const Manifold& m){
-        const float percent = 0.2f; // usually 20% to 80%
-        const float slop = 0.01f;   // usually 0.01 to 0.1
-        float invMassSum = m.A->invMass + m.B->invMass;
-        if(invMassSum==0) return;
-        float corr = std::max(m.penetration - slop, 0.0f)/(invMassSum) * percent;
-        Vec2 correction = m.normal * corr;
-        if(!m.A->isStatic) m.A->pos = m.A->pos - correction * m.A->invMass;
-        if(!m.B->isStatic) m.B->pos = m.B->pos + correction * m.B->invMass;
-    }
-};
-
-// Draw a filled circle by drawing horizontal spans
-void DrawFilledCircle(SDL_Renderer* ren, int cx, int cy, int r){
-    for(int dy=-r; dy<=r; dy++){
-        int dx = (int)std::sqrt(r*r - dy*dy);
-        SDL_RenderDrawLine(ren, cx-dx, cy+dy, cx+dx, cy+dy);
-    }
+        
+        static void renderInteractionMetadata(const InteractionMetadata& metadata) {
+            if(!visualizationActive || !metadata.contactExists) return;
+            
+            auto duration = std::chrono::duration<float>(
+                std::chrono::high_resolution_clock::now() - metadata.detectionTimestamp
+            ).count();
+            
+            std::cout << "INTERACTION[" << metadata.interactionType << "]: "
+                      << "penetration[" << metadata.interpenetrationMagnitude << "] "
+                      << "axis[" << metadata.separationAxis[0] << "," << metadata.separationAxis[1] << "] "
+                      << "age[" << duration << "ms]" << std::endl;
+        }
+        
+        static void renderInfluenceField(const PhysicalManifestation& entity) {
+            if(!visualizationActive) return;
+            
+            auto position = entity.getSpatialConfiguration();
+            auto momentum = entity.getMomentumVector();
+            auto mass = entity.retrieveProperty("mass_coefficient");
+            
+            // Calculate kinetic energy for visualization
+            auto kineticEnergy = 0.5f * mass * 
+                (momentum[0] * momentum[0] + momentum[1] * momentum[1]);
+            
+            if(kineticEnergy > 0.1f) {
+                std::cout << "INFLUENCE_FIELD at [" << position[0] << "," << position[1] 
+                          << "]: kinetic_energy[" << kineticEnergy << "] "
+                          << "momentum[" << momentum[0] << "," << momentum[1] << "]" << std::endl;
+            }
+        }
+        
+        static void dumpDiagnosticHistory() {
+            if(!visualizationActive) return;
+            
+            std::cout << "\n=== DIAGNOSTIC HISTORY ===" << std::endl;
+            for(const auto& entry : debugHistory) {
+                std::cout << entry << std::endl;
+            }
+            std::cout << "========================\n" << std::endl;
+        }
+    };
+    
+    bool DiagnosticVisualizationFramework::visualizationActive = false;
+    std::vector<std::string> DiagnosticVisualizationFramework::debugHistory;
+    std::chrono::high_resolution_clock::time_point DiagnosticVisualizationFramework::lastToggle = 
+        std::chrono::high_resolution_clock::now();
+    
+    // Completely different world representation with event system
+    class UniversalSimulationEngine {
+        std::vector<std::unique_ptr<PhysicalManifestation>> entityRegistry;
+        SpatialVector universalGravitationalField;
+        float temporalQuantum;
+        
+        std::unique_ptr<PositionalAdjustmentStrategy> positionResolver;
+        std::unique_ptr<MomentumTransferStrategy> momentumResolver;
+        
+        std::vector<InteractionMetadata> activeInteractions;
+        size_t simulationCycles;
+        
+    public:
+        UniversalSimulationEngine(SpatialVector gravitationalField = SpatialVector{0, -975.0f}) 
+            : universalGravitationalField(gravitationalField), 
+              temporalQuantum(1.0f / 60.0f),
+              simulationCycles(0) {
+            
+            positionResolver = std::make_unique<PositionalAdjustmentStrategy>();
+            momentumResolver = std::make_unique<MomentumTransferStrategy>();
+            
+            InteractionAnalyzer::initializeDetectionRegistry();
+        }
+        
+        void registerPhysicalManifestation(std::unique_ptr<PhysicalManifestation> entity) {
+            entityRegistry.push_back(std::move(entity));
+        }
+        
+        void configureGravitationalField(const SpatialVector& field) { 
+            universalGravitationalField = field; 
+        }
+        
+        void executeSimulationCycle() {
+            simulationCycles++;
+            
+            // Phase 1: Apply universal forces
+            for(auto& entity : entityRegistry) {
+                if(entity->getCurrentState() != EntityState::STATIC) {
+                    auto mass = entity->retrieveProperty("mass_coefficient");
+                    auto gravitationalInfluence = SpatialVector{
+                        universalGravitationalField[0] * mass,
+                        universalGravitationalField[1] * mass
+                    };
+                    entity->accumulateExternalInfluence(gravitationalInfluence);
+                }
+            }
+            
+            // Phase 2: Render influence fields
+            for(const auto& entity : entityRegistry) {
+                DiagnosticVisualizationFramework::renderInfluenceField(*entity);
+            }
+            
+            // Phase 3: Temporal integration
+            for(auto& entity : entityRegistry) {
+                entity->performTemporalIntegration(temporalQuantum);
+            }
+            
+            // Phase 4: Interaction detection and resolution
+            activeInteractions.clear();
+            
+            for(size_t i = 0; i < entityRegistry.size(); ++i) {
+                for(size_t j = i + 1; j < entityRegistry.size(); ++j) {
+                    auto interactionData = InteractionAnalyzer::analyzeInteraction(
+                        entityRegistry[i].get(), entityRegistry[j].get());
+                    
+                    if(interactionData.contactExists) {
+                        activeInteractions.push_back(interactionData);
+                        
+                        DiagnosticVisualizationFramework::renderInteractionMetadata(interactionData);
+                        
+                        positionResolver->executeResolution(interactionData);
+                        momentumResolver->executeResolution(interactionData);
+                    }
+                }
+            }
+            
+            // Phase 5: Render entities
+            for(const auto& entity : entityRegistry) {
+                DiagnosticVisualizationFramework::renderPhysicalManifestation(*entity);
+            }
+            
+            // Phase 6: Periodic diagnostic dump
+            if(simulationCycles % 300 == 0) {
+                DiagnosticVisualizationFramework::dumpDiagnosticHistory();
+            }
+        }
+        
+        auto retrieveEntityCount() const -> size_t { 
+            return entityRegistry.size(); 
+        }
+        
+        auto accessEntity(size_t index) -> PhysicalManifestation* { 
+            return index < entityRegistry.size() ? entityRegistry[index].get() : nullptr; 
+        }
+        
+        auto getActiveInteractionCount() const -> size_t {
+            return activeInteractions.size();
+        }
+    };
+    
+    // Completely different game architecture with state machines
+    class AdvancedArcadePhysicsSimulator {
+        std::unique_ptr<UniversalSimulationEngine> simulationEngine;
+        std::chrono::high_resolution_clock::time_point previousTemporalMarker;
+        
+        enum class SimulatorState { INITIALIZING, RUNNING, PAUSED, TERMINATING };
+        SimulatorState currentState;
+        
+    public:
+        AdvancedArcadePhysicsSimulator() 
+            : simulationEngine(std::make_unique<UniversalSimulationEngine>()),
+              previousTemporalMarker(std::chrono::high_resolution_clock::now()),
+              currentState(SimulatorState::INITIALIZING) {
+            bootstrapSimulationEnvironment();
+            currentState = SimulatorState::RUNNING;
+        }
+        
+        void bootstrapSimulationEnvironment() {
+            // Construct foundational surface
+            auto foundationalPlatform = std::make_unique<PhysicalManifestation>(
+                SpatialVector{400, 50},
+                std::make_unique<ConcreteGeometricPrimitive<MaterialGeometry::QUADRILATERAL>>(
+                    std::make_pair(800.0f, 100.0f)),
+                std::map<std::string, float>{
+                    {"mass_coefficient", 1.0f},
+                    {"bounce_factor", 0.2f},
+                    {"surface_roughness", 0.9f},
+                    {"kinetic_flag", 0.0f}
+                }
+            );
+            foundationalPlatform->modifyProperty("kinetic_flag", 0.0f);
+            simulationEngine->registerPhysicalManifestation(std::move(foundationalPlatform));
+            
+            // Construct lateral barriers
+            auto leftBarrier = std::make_unique<PhysicalManifestation>(
+                SpatialVector{50, 300},
+                std::make_unique<ConcreteGeometricPrimitive<MaterialGeometry::QUADRILATERAL>>(
+                    std::make_pair(100.0f, 600.0f)),
+                std::map<std::string, float>{
+                    {"mass_coefficient", 1.0f},
+                    {"bounce_factor", 0.1f},
+                    {"surface_roughness", 0.8f},
+                    {"kinetic_flag", 0.0f}
+                }
+            );
+            simulationEngine->registerPhysicalManifestation(std::move(leftBarrier));
+            
+            auto rightBarrier = std::make_unique<PhysicalManifestation>(
+                SpatialVector{750, 300},
+                std::make_unique<ConcreteGeometricPrimitive<MaterialGeometry::QUADRILATERAL>>(
+                    std::make_pair(100.0f, 600.0f)),
+                std::map<std::string, float>{
+                    {"mass_coefficient", 1.0f},
+                    {"bounce_factor", 0.1f},
+                    {"surface_roughness", 0.8f},
+                    {"kinetic_flag", 0.0f}
+                }
+            );
+            simulationEngine->registerPhysicalManifestation(std::move(rightBarrier));
+            
+            // Construct dynamic entities
+            auto kinematicCube = std::make_unique<PhysicalManifestation>(
+                SpatialVector{200, 400},
+                std::make_unique<ConcreteGeometricPrimitive<MaterialGeometry::QUADRILATERAL>>(
+                    std::make_pair(40.0f, 40.0f)),
+                std::map<std::string, float>{
+                    {"mass_coefficient", 2.5f},
+                    {"bounce_factor", 0.65f},
+                    {"surface_roughness", 0.4f},
+                    {"kinetic_flag", 1.0f}
+                }
+            );
+            simulationEngine->registerPhysicalManifestation(std::move(kinematicCube));
+            
+            auto dynamicSpheroid = std::make_unique<PhysicalManifestation>(
+                SpatialVector{600, 500},
+                std::make_unique<ConcreteGeometricPrimitive<MaterialGeometry::SPHEROID>>(20.0f),
+                std::map<std::string, float>{
+                    {"mass_coefficient", 1.8f},
+                    {"bounce_factor", 0.92f},
+                    {"surface_roughness", 0.2f},
+                    {"kinetic_flag", 1.0f}
+                }
+            );
+            dynamicSpheroid->applyMomentumVector(SpatialVector{-175, 135});
+            simulationEngine->registerPhysicalManifestation(std::move(dynamicSpheroid));
+        }
+        
+        void executeMainSimulationLoop() {
+            std::cout << "Advanced Arcade Physics Simulator Operational at 60Hz" << std::endl;
+            std::cout << "Commands: 'diagnostic' = toggle visualization, 'terminate' = exit" << std::endl;
+            
+            size_t frameCounter = 0;
+            
+            while(currentState != SimulatorState::TERMINATING) {
+                auto currentTemporalMarker = std::chrono::high_resolution_clock::now();
+                auto temporalDelta = std::chrono::duration<float>(
+                    currentTemporalMarker - previousTemporalMarker).count();
+                
+                if(temporalDelta >= 1.0f / 60.0f && currentState == SimulatorState::RUNNING) {
+                    simulationEngine->executeSimulationCycle();
+                    previousTemporalMarker = currentTemporalMarker;
+                    frameCounter++;
+                    
+                    if(frameCounter % 60 == 0) {
+                        std::cout << "\n=== Simulation Cycle " << frameCounter 
+                                  << " [Entities: " << simulationEngine->retrieveEntityCount()
+                                  << ", Interactions: " << simulationEngine->getActiveInteractionCount()
+                                  << "] ===" << std::endl;
+                    }
+                }
+                
+                // Command processing
+                if(std::cin.rdbuf()->in_avail() > 0) {
+                    std::string command;
+                    std::cin >> command;
+                    
+                    if(command == "diagnostic") {
+                        DiagnosticVisualizationFramework::switchVisualizationMode();
+                    } else if(command == "terminate") {
+                        currentState = SimulatorState::TERMINATING;
+                    } else if(command == "pause") {
+                        currentState = (currentState == SimulatorState::RUNNING) ? 
+                                     SimulatorState::PAUSED : SimulatorState::RUNNING;
+                        std::cout << "Simulator " << 
+                                  (currentState == SimulatorState::PAUSED ? "PAUSED" : "RESUMED") << std::endl;
+                    }
+                }
+                
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+            }
+        }
+    };
 }
 
-// Draw circle outline
-void DrawCircle(SDL_Renderer* ren, int cx, int cy, int r){
-    const int segments = 32;
-    float theta = 0, step = 2.0f * M_PI / segments;
-    int x0 = cx + (int)(r * std::cos(0)), y0 = cy + (int)(r * std::sin(0));
-    for(int i=1; i<=segments; ++i){
-        theta += step;
-        int x1 = cx + (int)(r * std::cos(theta)), y1 = cy + (int)(r * std::sin(theta));
-        SDL_RenderDrawLine(ren, x0, y0, x1, y1);
-        x0 = x1; y0 = y1;
-    }
-}
-
-int main(int argc, char* argv[]){
-    SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window* win = SDL_CreateWindow("2D Physics Demo", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600, 0);
-    SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
-
-    PhysicsWorld world;
-
-    // create floor (static)
-    Body floor(Shape::AABB);
-    floor.isStatic = true;
-    floor.pos = {400, 580};
-    floor.halfSize = {400, 20};
-    world.addBody(&floor);
-
-    // create some boxes
-    for(int i=0;i<5;i++){
-        Body* box = new Body(Shape::AABB);
-        box->pos = {200.0f + i*80, 100.0f};
-        box->halfSize = {30,30};
-        box->mass = 2.0f;
-        box->restitution = 0.4f;
-        box->friction = 0.3f;
-        world.addBody(box);
-    }
-    // create some circles
-    for(int i=0;i<5;i++){
-        Body* c = new Body(Shape::CIRCLE);
-        c->pos = {200.0f + i*80, 0.0f};
-        c->radius = 20.0f;
-        c->mass = 1.0f;
-        c->restitution = 0.6f;
-        c->friction = 0.2f;
-        world.addBody(c);
-    }
-
-    bool running = true;
-    bool debugDraw = false;
-    Uint32 prevTicks = SDL_GetTicks();
-
-    while(running){
-        // -- events --
-        SDL_Event e;
-        while(SDL_PollEvent(&e)){
-            if(e.type==SDL_QUIT) running=false;
-            else if(e.type==SDL_KEYDOWN){
-                if(e.key.keysym.sym==SDLK_ESCAPE) running=false;
-                else if(e.key.keysym.sym==SDLK_d) debugDraw = !debugDraw;
-            }
-        }
-        // -- physics step --
-        world.step();
-
-        // -- render --
-        SDL_SetRenderDrawColor(ren, 20, 20, 20, 255);
-        SDL_RenderClear(ren);
-
-        // draw bodies
-        for(auto b: world.bodies){
-            if(b->shape==Shape::AABB){
-                SDL_Rect r{ int(b->pos.x - b->halfSize.x),
-                            int(b->pos.y - b->halfSize.y),
-                            int(b->halfSize.x*2),
-                            int(b->halfSize.y*2) };
-                if(b->isStatic) SDL_SetRenderDrawColor(ren, 100,100,255,255);
-                else SDL_SetRenderDrawColor(ren, 200,50,50,255);
-                SDL_RenderFillRect(ren, &r);
-                if(debugDraw){
-                    SDL_SetRenderDrawColor(ren, 255,255,255,255);
-                    SDL_RenderDrawRect(ren, &r);
-                    // velocity
-                    Vec2 vtip = b->pos + b->vel*0.1f;
-                    SDL_SetRenderDrawColor(ren, 255,255,0,255);
-                    SDL_RenderDrawLine(ren, int(b->pos.x), int(b->pos.y),
-                                       int(vtip.x), int(vtip.y));
-                }
-            } else {
-                if(b->isStatic) SDL_SetRenderDrawColor(ren, 100,100,255,255);
-                else SDL_SetRenderDrawColor(ren, 200,200,50,255);
-                DrawFilledCircle(ren, int(b->pos.x), int(b->pos.y), int(b->radius));
-                if(debugDraw){
-                    SDL_SetRenderDrawColor(ren, 255,255,255,255);
-                    DrawCircle(ren, int(b->pos.x), int(b->pos.y), int(b->radius));
-                    Vec2 vtip = b->pos + b->vel*0.1f;
-                    SDL_SetRenderDrawColor(ren, 255,255,0,255);
-                    SDL_RenderDrawLine(ren, int(b->pos.x), int(b->pos.y),
-                                       int(vtip.x), int(vtip.y));
-                }
-            }
-        }
-
-        // draw contact normals
-        if(debugDraw){
-            for(auto& m: world.contacts){
-                SDL_SetRenderDrawColor(ren, 0,255,0,255);
-                Vec2 p = m.contactPoint;
-                Vec2 q = p + m.normal * 30.0f;
-                SDL_RenderDrawLine(ren, int(p.x), int(p.y), int(q.x), int(q.y));
-            }
-        }
-
-        SDL_RenderPresent(ren);
-
-        // cap at ~60fps
-        Uint32 now = SDL_GetTicks();
-        Uint32 frameTime = now - prevTicks;
-        if(frameTime < 16) SDL_Delay(16 - frameTime);
-        prevTicks = now;
-    }
-
-    SDL_DestroyRenderer(ren);
-    SDL_DestroyWindow(win);
-    SDL_Quit();
+int main() {
+    UltraObfuscatedPhysicsFramework::AdvancedArcadePhysicsSimulator simulator;
+    simulator.executeMainSimulationLoop();
     return 0;
 }
-```
-
-How it works in brief:
-
-1. **Body** holds shape type, position, velocity, mass, restitution & friction, and shape parameters (radius or halfSize).
-2. **PhysicsWorld** steps at a fixed `dt=1/60`.  
-   - Applies gravity,  
-   - Does naive O(n²) pair checks (skips static–static),  
-   - Detects circle–circle & AABB–AABB collisions,  
-   - Builds a small `Manifold` for each collision,  
-   - Resolves impulses (including friction),  
-   - Applies a positional correction to avoid sinking,  
-   - Integrates velocities into positions.
-3. **Rendering** uses SDL2:  
-   - Fills bodies,  
-   - On pressing `D`, toggles debug: draws outlines, velocity vectors (yellow), and collision normals (green).
-4. **Modularity**: you can add more shape‐vs‐shape routines, stack up more solvers, change integrators, etc.
-
-Compile and link with SDL2 (`-lSDL2`), run, and press `D` to toggle the physics debug overlay. Enjoy!
