@@ -20,7 +20,7 @@ namespace PhysicsSim {
 
     public:
         template<typename... Args>
-        Vec(Args... args) : values_{ static_cast<T>(args)... } {}
+        explicit Vec(Args... args) : values_{ static_cast<T>(args)... } {} // FIX: explicit
 
         Vec() : values_{} {}
 
@@ -43,8 +43,7 @@ namespace PhysicsSim {
         }
 
         Vec normalized() const {
-            T n = norm();
-            if (n > T(1e-10)) {
+            if (auto n = norm(); n > T(1e-10)) { // FIX: if-init statement
                 Vec result;
                 for (size_t i = 0; i < Dim; ++i)
                     result[i] = values_[i] / n;
@@ -92,7 +91,7 @@ namespace PhysicsSim {
         typename GeometryTraits<T>::ParamType params_;
 
     public:
-        explicit Geometry(const typename GeometryTraits<T>::ParamType& params)
+        explicit Geometry(const typename GeometryTraits<T>::ParamType& params) // FIX: explicit
             : params_(params) {
             type = T;
         }
@@ -129,7 +128,8 @@ namespace PhysicsSim {
 
     // --- Physical Entity ---
     class Entity {
-        std::map<std::string, float> properties_;
+        // FIX: Use transparent comparator std::less<> for maps with string keys
+        std::map<std::string, float, std::less<>> properties_;
         std::unique_ptr<GeometryBase> geometry_;
         EntityState state_;
         Vec2f position_;
@@ -143,15 +143,16 @@ namespace PhysicsSim {
     public:
         Entity(const Vec2f& position,
                std::unique_ptr<GeometryBase> geometry,
-               std::map<std::string, float> props = {})
-            : position_(position), geometry_(std::move(geometry)), properties_(std::move(props)) {
-
+               std::map<std::string, float, std::less<>> props = {})
+            : position_(position),
+              geometry_(std::move(geometry)),
+              properties_(std::move(props)),
+              momentum_{0, 0}, // FIX: Initialize in initializer list
+              acceleration_{0, 0}, // FIX: Initialize in initializer list
+              externalForce_{0, 0} // FIX: Initialize in initializer list
+        {
             std::uniform_int_distribution<int> dist(0, 3);
             state_ = static_cast<EntityState>(dist(gen_));
-
-            momentum_ = Vec2f{ 0, 0 };
-            acceleration_ = Vec2f{ 0, 0 };
-            externalForce_ = Vec2f{ 0, 0 };
 
             if (properties_.empty()) {
                 properties_ = {
@@ -208,7 +209,7 @@ namespace PhysicsSim {
     };
 
     std::random_device Entity::rd_;
-    std::mt19937 Entity::gen_(rd_());
+    std::mt19937 Entity::gen_(Entity::rd_());
 
     // --- Interaction Metadata ---
     struct Interaction {
@@ -220,15 +221,138 @@ namespace PhysicsSim {
         Vec2f contactPoint;
         float relativeVelocity = 0.0f;
         std::string type = "Undefined";
-        std::chrono::high_resolution_clock::time_point detectionTime;
+        std::chrono::high_resolution_clock::time_point detectionTime{}; // FIX: in-class initializer
 
-        Interaction() : detectionTime(std::chrono::high_resolution_clock::now()) {}
+        Interaction() = default;
     };
+
+    // --- Helper functions for collision detection ---
+    inline bool separatedOnAxis(float minA, float maxA, float minB, float maxB) {
+        return (maxA < minB) || (minA > maxB);
+    }
+
+    inline float calculateOverlap(float minA, float maxA, float minB, float maxB) {
+        return std::min(maxA - minB, maxB - minA);
+    }
 
     // --- Interaction Detection ---
     class InteractionDetector {
         using DetectFn = std::function<Interaction(Entity*, Entity*)>;
         static std::map<std::pair<GeometryType, GeometryType>, DetectFn> registry_;
+
+        // Split complex lambdas into named functions to reduce complexity
+
+        static Interaction detectQuadQuad(Entity* a, Entity* b) {
+            Interaction interaction;
+            interaction.entityA = a;
+            interaction.entityB = b;
+            interaction.type = "Quad-Quad";
+
+            auto [minA, maxA] = a->getBounds();
+            auto [minB, maxB] = b->getBounds();
+
+            if (separatedOnAxis(minA[0], maxA[0], minB[0], maxB[0]) ||
+                separatedOnAxis(minA[1], maxA[1], minB[1], maxB[1])) {
+                return interaction;
+            }
+
+            interaction.contact = true;
+
+            float overlapX = calculateOverlap(minA[0], maxA[0], minB[0], maxB[0]);
+            float overlapY = calculateOverlap(minA[1], maxA[1], minB[1], maxB[1]);
+
+            if (overlapX <= overlapY) {
+                interaction.penetration = overlapX;
+                float dir = (a->getPosition()[0] < b->getPosition()[0]) ? -1.0f : 1.0f;
+                interaction.separationAxis = Vec2f{ dir, 0 };
+            }
+            else {
+                interaction.penetration = overlapY;
+                float dir = (a->getPosition()[1] < b->getPosition()[1]) ? -1.0f : 1.0f;
+                interaction.separationAxis = Vec2f{ 0, dir };
+            }
+
+            return interaction;
+        }
+
+        static Interaction detectSphereSphere(Entity* a, Entity* b) {
+            Interaction interaction;
+            interaction.entityA = a;
+            interaction.entityB = b;
+            interaction.type = "Spheroid-Spheroid";
+
+            auto* sphA = static_cast<Geometry<GeometryType::Spheroid>*>(a->getGeometry());
+            auto* sphB = static_cast<Geometry<GeometryType::Spheroid>*>(b->getGeometry());
+
+            float rA = sphA->params();
+            float rB = sphB->params();
+
+            Vec2f delta = b->getPosition().apply(a->getPosition(), std::minus<float>());
+            float dist = delta.norm();
+            float rSum = rA + rB;
+
+            if (dist >= rSum)
+                return interaction;
+
+            interaction.contact = true;
+            interaction.penetration = rSum - dist;
+
+            if (dist > 1e-6f) {
+                interaction.separationAxis = delta.normalized();
+            }
+            else {
+                interaction.separationAxis = Vec2f{ 1, 0 };
+            }
+
+            return interaction;
+        }
+
+        static Interaction detectQuadSphere(Entity* quad, Entity* sph) {
+            Interaction interaction;
+            interaction.entityA = quad;
+            interaction.entityB = sph;
+            interaction.type = "Quad-Spheroid";
+
+            auto* sphGeom = static_cast<Geometry<GeometryType::Spheroid>*>(sph->getGeometry());
+            float radius = sphGeom->params();
+
+            auto [minQ, maxQ] = quad->getBounds();
+            Vec2f centerS = sph->getPosition();
+
+            auto clamp = [](float v, float min, float max) {
+                return std::max(min, std::min(v, max));
+            };
+
+            Vec2f closestPoint{
+                clamp(centerS[0], minQ[0], maxQ[0]),
+                clamp(centerS[1], minQ[1], maxQ[1])
+            };
+
+            Vec2f separation = centerS.apply(closestPoint, std::minus<float>());
+            float dist = separation.norm();
+
+            if (dist >= radius)
+                return interaction;
+
+            interaction.contact = true;
+            interaction.penetration = radius - dist;
+
+            if (dist > 1e-6f) {
+                interaction.separationAxis = separation.normalized();
+            }
+            else {
+                Vec2f centerQ = quad->getPosition();
+                Vec2f delta = centerQ.apply(centerS, std::minus<float>());
+                if (std::abs(delta[0]) > std::abs(delta[1])) {
+                    interaction.separationAxis = Vec2f{ delta[0] > 0 ? 1.f : -1.f, 0 };
+                }
+                else {
+                    interaction.separationAxis = Vec2f{ 0, delta[1] > 0 ? 1.f : -1.f };
+                }
+            }
+
+            return interaction;
+        }
 
     public:
         static Interaction detect(Entity* a, Entity* b) {
@@ -250,132 +374,9 @@ namespace PhysicsSim {
         }
 
         static void initialize() {
-            // Quadrilateral vs Quadrilateral
-            registry_[{GeometryType::Quadrilateral, GeometryType::Quadrilateral}] = 
-                [](Entity* a, Entity* b) {
-                    Interaction interaction;
-                    interaction.entityA = a;
-                    interaction.entityB = b;
-                    interaction.type = "Quad-Quad";
-
-                    auto [minA, maxA] = a->getBounds();
-                    auto [minB, maxB] = b->getBounds();
-
-                    auto separated = [](float minA, float maxA, float minB, float maxB) {
-                        return (maxA < minB) || (minA > maxB);
-                    };
-
-                    bool sepX = separated(minA[0], maxA[0], minB[0], maxB[0]);
-                    bool sepY = separated(minA[1], maxA[1], minB[1], maxB[1]);
-
-                    if (sepX || sepY)
-                        return interaction;
-                    
-                    interaction.contact = true;
-
-                    auto overlap = [](float minA, float maxA, float minB, float maxB) -> float {
-                        return std::min(maxA - minB, maxB - minA);
-                    };
-
-                    float overlapX = overlap(minA[0], maxA[0], minB[0], maxB[0]);
-                    float overlapY = overlap(minA[1], maxA[1], minB[1], maxB[1]);
-
-                    if (overlapX <= overlapY) {
-                        interaction.penetration = overlapX;
-                        float dir = (a->getPosition()[0] < b->getPosition()[0]) ? -1.0f : 1.0f;
-                        interaction.separationAxis = Vec2f{ dir, 0 };
-                    }
-                    else {
-                        interaction.penetration = overlapY;
-                        float dir = (a->getPosition()[1] < b->getPosition()[1]) ? -1.0f : 1.0f;
-                        interaction.separationAxis = Vec2f{ 0, dir };
-                    }
-
-                    return interaction;
-                };
-
-            // Spheroid vs Spheroid
-            registry_[{GeometryType::Spheroid, GeometryType::Spheroid}] =
-                [](Entity* a, Entity* b) {
-                    Interaction interaction;
-                    interaction.entityA = a;
-                    interaction.entityB = b;
-                    interaction.type = "Spheroid-Spheroid";
-
-                    auto* sphA = static_cast<Geometry<GeometryType::Spheroid>*>(a->getGeometry());
-                    auto* sphB = static_cast<Geometry<GeometryType::Spheroid>*>(b->getGeometry());
-
-                    float rA = sphA->params();
-                    float rB = sphB->params();
-
-                    Vec2f delta = b->getPosition().apply(a->getPosition(), std::minus<float>());
-                    float dist = delta.norm();
-                    float rSum = rA + rB;
-
-                    if (dist >= rSum)
-                        return interaction;
-
-                    interaction.contact = true;
-                    interaction.penetration = rSum - dist;
-
-                    if (dist > 1e-6f) {
-                        interaction.separationAxis = delta.normalized();
-                    }
-                    else {
-                        interaction.separationAxis = Vec2f{ 1, 0 };
-                    }
-
-                    return interaction;
-                };
-
-            // Quadrilateral vs Spheroid
-            registry_[{GeometryType::Quadrilateral, GeometryType::Spheroid}] =
-                [](Entity* quad, Entity* sph) {
-                    Interaction interaction;
-                    interaction.entityA = quad;
-                    interaction.entityB = sph;
-                    interaction.type = "Quad-Spheroid";
-
-                    auto* sphGeom = static_cast<Geometry<GeometryType::Spheroid>*>(sph->getGeometry());
-                    float radius = sphGeom->params();
-
-                    auto [minQ, maxQ] = quad->getBounds();
-                    Vec2f centerS = sph->getPosition();
-
-                    auto clamp = [](float v, float min, float max) {
-                        return std::max(min, std::min(v, max));
-                    };
-
-                    Vec2f closestPoint{
-                        clamp(centerS[0], minQ[0], maxQ[0]),
-                        clamp(centerS[1], minQ[1], maxQ[1])
-                    };
-
-                    Vec2f separation = centerS.apply(closestPoint, std::minus<float>());
-                    float dist = separation.norm();
-
-                    if (dist >= radius)
-                        return interaction;
-
-                    interaction.contact = true;
-                    interaction.penetration = radius - dist;
-
-                    if (dist > 1e-6f) {
-                        interaction.separationAxis = separation.normalized();
-                    }
-                    else {
-                        Vec2f centerQ = quad->getPosition();
-                        Vec2f delta = centerQ.apply(centerS, std::minus<float>());
-                        if (std::abs(delta[0]) > std::abs(delta[1])) {
-                            interaction.separationAxis = Vec2f{ delta[0] > 0 ? 1.f : -1.f, 0 };
-                        }
-                        else {
-                            interaction.separationAxis = Vec2f{ 0, delta[1] > 0 ? 1.f : -1.f };
-                        }
-                    }
-
-                    return interaction;
-                };
+            registry_[{GeometryType::Quadrilateral, GeometryType::Quadrilateral}] = detectQuadQuad;
+            registry_[{GeometryType::Spheroid, GeometryType::Spheroid}] = detectSphereSphere;
+            registry_[{GeometryType::Quadrilateral, GeometryType::Spheroid}] = detectQuadSphere;
         }
     };
 
@@ -479,7 +480,7 @@ namespace PhysicsSim {
         static void renderEntity(const Entity& e) {
             if (!active_) return;
 
-            static const char* states[] = { "Dormant", "Kinetic", "Static", "Transitioning" };
+            static constexpr const char* states[] = { "Dormant", "Kinetic", "Static", "Transitioning" };
 
             GeometryBase* geom = e.getGeometry();
 
@@ -627,8 +628,8 @@ namespace PhysicsSim {
             // Ground
             sim_->addEntity(std::make_unique<Entity>(
                 Vec2f{400, 50},
-                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::make_pair(800.f, 100.f)),
-                std::map<std::string, float>{
+                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::pair{800.f, 100.f}), // FIX: CTAD, don't specify template args
+                std::map<std::string, float, std::less<>>{
                     {"mass", 1.f},
                     {"bounce", 0.2f},
                     {"roughness", 0.9f},
@@ -638,25 +639,25 @@ namespace PhysicsSim {
             // Walls
             sim_->addEntity(std::make_unique<Entity>(
                 Vec2f{50, 300},
-                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::make_pair(100.f, 600.f)),
-                std::map<std::string, float>{{"mass", 1.f}, {"bounce", 0.1f}, {"roughness", 0.8f}, {"kinetic", 0.f}}));
+                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::pair{100.f, 600.f}),
+                std::map<std::string, float, std::less<>>{{"mass", 1.f}, {"bounce", 0.1f}, {"roughness", 0.8f}, {"kinetic", 0.f}}));
 
             sim_->addEntity(std::make_unique<Entity>(
                 Vec2f{750, 300},
-                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::make_pair(100.f, 600.f)),
-                std::map<std::string, float>{{"mass", 1.f}, {"bounce", 0.1f}, {"roughness", 0.8f}, {"kinetic", 0.f}}));
+                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::pair{100.f, 600.f}),
+                std::map<std::string, float, std::less<>>{{"mass", 1.f}, {"bounce", 0.1f}, {"roughness", 0.8f}, {"kinetic", 0.f}}));
 
             // Dynamic Cube
             sim_->addEntity(std::make_unique<Entity>(
                 Vec2f{200, 400},
-                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::make_pair(40.f, 40.f)),
-                std::map<std::string, float>{{"mass", 2.5f}, {"bounce", 0.65f}, {"roughness", 0.4f}, {"kinetic", 1.f}}));
+                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::pair{40.f, 40.f}),
+                std::map<std::string, float, std::less<>>{{"mass", 2.5f}, {"bounce", 0.65f}, {"roughness", 0.4f}, {"kinetic", 1.f}}));
 
             // Dynamic Spheroid
             auto spheroid = std::make_unique<Entity>(
                 Vec2f{600, 500},
                 std::make_unique<Geometry<GeometryType::Spheroid>>(20.f),
-                std::map<std::string, float>{{"mass", 1.8f}, {"bounce", 0.92f}, {"roughness", 0.2f}, {"kinetic", 1.f}});
+                std::map<std::string, float, std::less<>>{{"mass", 1.8f}, {"bounce", 0.92f}, {"roughness", 0.2f}, {"kinetic", 1.f}});
             spheroid->setMomentum(Vec2f{ -175.f, 135.f });
             sim_->addEntity(std::move(spheroid));
         }
@@ -683,7 +684,6 @@ namespace PhysicsSim {
                     }
                 }
 
-                // Check for commands
                 if (std::cin.rdbuf()->in_avail() > 0) {
                     std::string cmd;
                     std::cin >> cmd;
