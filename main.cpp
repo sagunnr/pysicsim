@@ -126,6 +126,7 @@ namespace PhysicsSim {
     class Entity {
         std::map<std::string, float, std::less<>> properties_;
         std::unique_ptr<GeometryBase> geometry_;
+
         EntityState state_{EntityState::Dormant};
         Vec2f position_;
         Vec2f momentum_{0, 0};
@@ -133,7 +134,7 @@ namespace PhysicsSim {
         Vec2f externalForce_{0, 0};
 
     public:
-        static std::mt19937& rng() noexcept {
+        [[nodiscard]] static std::mt19937& rng() noexcept {
             static std::random_device rd;
             static std::mt19937 gen{rd()};
             return gen;
@@ -142,8 +143,7 @@ namespace PhysicsSim {
         Entity(const Vec2f& position,
                std::unique_ptr<GeometryBase> geometry,
                std::map<std::string, float, std::less<>> props = {})
-            : position_(position), geometry_(std::move(geometry)), properties_(std::move(props)) 
-        {
+            : position_(position), geometry_(std::move(geometry)), properties_(std::move(props)) {
             std::uniform_int_distribution<int> dist(0, 3);
             state_ = static_cast<EntityState>(dist(rng()));
 
@@ -235,8 +235,10 @@ namespace PhysicsSim {
             const auto [minA, maxA] = a->getBounds();
             const auto [minB, maxB] = b->getBounds();
 
-            if (separatedOnAxis(minA[0], maxA[0], minB[0], maxB[0])) return interaction;
-            if (separatedOnAxis(minA[1], maxA[1], minB[1], maxB[1])) return interaction;
+            if (separatedOnAxis(minA[0], maxA[0], minB[0], maxB[0]))
+                return interaction;
+            if (separatedOnAxis(minA[1], maxA[1], minB[1], maxB[1]))
+                return interaction;
 
             interaction.contact = true;
 
@@ -247,7 +249,8 @@ namespace PhysicsSim {
                 interaction.penetration = overlapX;
                 const float dir = (a->getPosition()[0] < b->getPosition()[0]) ? -1.0f : 1.0f;
                 interaction.separationAxis = Vec2f{dir, 0};
-            } else {
+            }
+            else {
                 interaction.penetration = overlapY;
                 const float dir = (a->getPosition()[1] < b->getPosition()[1]) ? -1.0f : 1.0f;
                 interaction.separationAxis = Vec2f{0, dir};
@@ -272,7 +275,8 @@ namespace PhysicsSim {
             const float dist = delta.norm();
             const float rSum = rA + rB;
 
-            if (dist >= rSum) return interaction;
+            if (dist >= rSum)
+                return interaction;
 
             interaction.contact = true;
             interaction.penetration = rSum - dist;
@@ -305,19 +309,22 @@ namespace PhysicsSim {
             const Vec2f separation = centerS.apply(closestPoint, std::minus<float>());
             const float dist = separation.norm();
 
-            if (dist >= radius) return interaction;
+            if (dist >= radius)
+                return interaction;
 
             interaction.contact = true;
             interaction.penetration = radius - dist;
 
             if (dist > 1e-6f) {
                 interaction.separationAxis = separation.normalized();
-            } else {
+            }
+            else {
                 const Vec2f centerQ = quad->getPosition();
                 const Vec2f delta = centerQ.apply(centerS, std::minus<float>());
                 if (std::abs(delta[0]) > std::abs(delta[1])) {
                     interaction.separationAxis = Vec2f{delta[0] > 0 ? 1.f : -1.f, 0};
-                } else {
+                }
+                else {
                     interaction.separationAxis = Vec2f{0, delta[1] > 0 ? 1.f : -1.f};
                 }
             }
@@ -346,7 +353,7 @@ namespace PhysicsSim {
             return {};
         }
 
-        static void initialize() {
+        static void initialize() noexcept {
             registry_[{GeometryType::Quadrilateral, GeometryType::Quadrilateral}] = detectQuadQuad;
             registry_[{GeometryType::Spheroid, GeometryType::Spheroid}] = detectSphereSphere;
             registry_[{GeometryType::Quadrilateral, GeometryType::Spheroid}] = detectQuadSphere;
