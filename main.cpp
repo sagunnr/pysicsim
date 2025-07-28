@@ -10,6 +10,7 @@
 #include <map>
 #include <string>
 #include <random>
+#include <type_traits> // for std::to_underlying
 
 namespace PhysicsSim {
 
@@ -20,7 +21,7 @@ namespace PhysicsSim {
 
     public:
         template<typename... Args>
-        explicit Vec(Args... args) : values_{ static_cast<T>(args)... } {} // FIX: explicit
+        explicit Vec(Args... args) : values_{ static_cast<T>(args)... } {}
 
         Vec() : values_{} {}
 
@@ -43,7 +44,7 @@ namespace PhysicsSim {
         }
 
         Vec normalized() const {
-            if (auto n = norm(); n > T(1e-10)) { // FIX: if-init statement
+            if (auto n = norm(); n > T(1e-10)) {
                 Vec result;
                 for (size_t i = 0; i < Dim; ++i)
                     result[i] = values_[i] / n;
@@ -91,7 +92,7 @@ namespace PhysicsSim {
         typename GeometryTraits<T>::ParamType params_;
 
     public:
-        explicit Geometry(const typename GeometryTraits<T>::ParamType& params) // FIX: explicit
+        explicit Geometry(const typename GeometryTraits<T>::ParamType& params)
             : params_(params) {
             type = T;
         }
@@ -128,14 +129,15 @@ namespace PhysicsSim {
 
     // --- Physical Entity ---
     class Entity {
-        // FIX: Use transparent comparator std::less<> for maps with string keys
         std::map<std::string, float, std::less<>> properties_;
         std::unique_ptr<GeometryBase> geometry_;
         EntityState state_;
         Vec2f position_;
-        Vec2f momentum_;
-        Vec2f acceleration_;
-        Vec2f externalForce_;
+
+        // Using in-class initializers instead of constructor init list (SonarCloud fix)
+        Vec2f momentum_{0, 0};
+        Vec2f acceleration_{0, 0};
+        Vec2f externalForce_{0, 0};
 
         static std::random_device rd_;
         static std::mt19937 gen_;
@@ -144,13 +146,9 @@ namespace PhysicsSim {
         Entity(const Vec2f& position,
                std::unique_ptr<GeometryBase> geometry,
                std::map<std::string, float, std::less<>> props = {})
-            : position_(position),
-              geometry_(std::move(geometry)),
-              properties_(std::move(props)),
-              momentum_{0, 0}, // FIX: Initialize in initializer list
-              acceleration_{0, 0}, // FIX: Initialize in initializer list
-              externalForce_{0, 0} // FIX: Initialize in initializer list
-        {
+            : position_(position), geometry_(std::move(geometry)), properties_(std::move(props)) {
+
+            // RNG seeded once - safe usage
             std::uniform_int_distribution<int> dist(0, 3);
             state_ = static_cast<EntityState>(dist(gen_));
 
@@ -209,7 +207,7 @@ namespace PhysicsSim {
     };
 
     std::random_device Entity::rd_;
-    std::mt19937 Entity::gen_(Entity::rd_());
+    std::mt19937 Entity::gen_(Entity::rd_()); // Safe: seeded once here
 
     // --- Interaction Metadata ---
     struct Interaction {
@@ -221,7 +219,7 @@ namespace PhysicsSim {
         Vec2f contactPoint;
         float relativeVelocity = 0.0f;
         std::string type = "Undefined";
-        std::chrono::high_resolution_clock::time_point detectionTime{}; // FIX: in-class initializer
+        std::chrono::high_resolution_clock::time_point detectionTime{}; // in-class init
 
         Interaction() = default;
     };
@@ -240,7 +238,7 @@ namespace PhysicsSim {
         using DetectFn = std::function<Interaction(Entity*, Entity*)>;
         static std::map<std::pair<GeometryType, GeometryType>, DetectFn> registry_;
 
-        // Split complex lambdas into named functions to reduce complexity
+        // Split complex lambdas into named functions to reduce complexity and nesting
 
         static Interaction detectQuadQuad(Entity* a, Entity* b) {
             Interaction interaction;
@@ -251,10 +249,11 @@ namespace PhysicsSim {
             auto [minA, maxA] = a->getBounds();
             auto [minB, maxB] = b->getBounds();
 
-            if (separatedOnAxis(minA[0], maxA[0], minB[0], maxB[0]) ||
-                separatedOnAxis(minA[1], maxA[1], minB[1], maxB[1])) {
+            // Reduced nesting with early return
+            if (separatedOnAxis(minA[0], maxA[0], minB[0], maxB[0]))
                 return interaction;
-            }
+            if (separatedOnAxis(minA[1], maxA[1], minB[1], maxB[1]))
+                return interaction;
 
             interaction.contact = true;
 
@@ -364,7 +363,8 @@ namespace PhysicsSim {
 
             if (auto it = registry_.find(key); it != registry_.end())
                 return it->second(a, b);
-            else if (auto it = registry_.find(revKey); it != registry_.end()) {
+
+            if (auto it = registry_.find(revKey); it != registry_.end()) {
                 Interaction res = it->second(b, a);
                 res.separationAxis = Vec2f{ -res.separationAxis[0], -res.separationAxis[1] };
                 return res;
@@ -480,18 +480,18 @@ namespace PhysicsSim {
         static void renderEntity(const Entity& e) {
             if (!active_) return;
 
-            static constexpr const char* states[] = { "Dormant", "Kinetic", "Static", "Transitioning" };
+            static constexpr std::array<const char*, 4> states = { "Dormant", "Kinetic", "Static", "Transitioning" };
 
             GeometryBase* geom = e.getGeometry();
 
             if (geom->type == GeometryType::Quadrilateral) {
                 auto [min, max] = e.getBounds();
-                std::cout << "Quadrilateral[" << states[static_cast<int>(e.getState())] << "]: bounds ["
+                std::cout << "Quadrilateral[" << states[static_cast<size_t>(std::to_underlying(e.getState()))] << "]: bounds ["
                     << min[0] << ", " << min[1] << "] to [" << max[0] << ", " << max[1] << "]\n";
             }
             else if (geom->type == GeometryType::Spheroid) {
                 auto* sph = static_cast<Geometry<GeometryType::Spheroid>*>(geom);
-                std::cout << "Spheroid[" << states[static_cast<int>(e.getState())] << "]: center ["
+                std::cout << "Spheroid[" << states[static_cast<size_t>(std::to_underlying(e.getState()))] << "]: center ["
                     << e.getPosition()[0] << ", " << e.getPosition()[1] << "] radius ["
                     << sph->params() << "]\n";
             }
@@ -512,8 +512,8 @@ namespace PhysicsSim {
         static void renderKineticField(const Entity& e) {
             if (!active_) return;
 
-            Vec2f pos = e.getPosition();
-            Vec2f mom = e.getMomentum();
+            auto pos = e.getPosition();
+            auto mom = e.getMomentum();
             float m = e.getProperty("mass");
 
             float kineticEnergy = 0.5f * m * (mom[0] * mom[0] + mom[1] * mom[1]);
@@ -543,15 +543,13 @@ namespace PhysicsSim {
         std::vector<std::unique_ptr<Entity>> entities_;
         Vec2f gravity_{ 0, -975.f };
         float timestep_ = 1.0f / 60.0f;
-        std::unique_ptr<PositionCorrection> posRes_;
-        std::unique_ptr<MomentumExchange> momRes_;
+        std::unique_ptr<PositionCorrection> posRes_ = std::make_unique<PositionCorrection>(); // In-class init fix
+        std::unique_ptr<MomentumExchange> momRes_ = std::make_unique<MomentumExchange>();    // In-class init fix
         std::vector<Interaction> interactions_;
         size_t cycleCount_ = 0;
 
     public:
         Simulation() {
-            posRes_ = std::make_unique<PositionCorrection>();
-            momRes_ = std::make_unique<MomentumExchange>();
             InteractionDetector::initialize();
         }
 
@@ -564,43 +562,39 @@ namespace PhysicsSim {
         void runCycle() {
             ++cycleCount_;
 
-            // Apply gravity
             for (auto& e : entities_) {
-                if (e->getState() != EntityState::Static) {
-                    float m = e->getProperty("mass");
-                    Vec2f gravForce{ gravity_[0] * m, gravity_[1] * m };
-                    e->addForce(gravForce);
-                }
+                if (e->getState() == EntityState::Static)
+                    continue;
+                float m = e->getProperty("mass");
+                Vec2f gravForce{ gravity_[0] * m, gravity_[1] * m };
+                e->addForce(gravForce);
             }
 
-            // Render influence fields
             for (const auto& e : entities_)
                 Diagnostic::renderKineticField(*e);
 
-            // Integrate physics
             for (auto& e : entities_)
                 e->integrate(timestep_);
 
-            // Detect interactions
             interactions_.clear();
-            for (size_t i = 0; i < entities_.size(); ++i) {
-                for (size_t j = i + 1; j < entities_.size(); ++j) {
+            const auto n = entities_.size();
+            for (size_t i = 0; i < n; ++i) {
+                for (size_t j = i + 1; j < n; ++j) {
                     auto interaction = InteractionDetector::detect(entities_[i].get(), entities_[j].get());
-                    if (interaction.contact) {
-                        interactions_.push_back(interaction);
-                        Diagnostic::renderInteraction(interaction);
+                    if (!interaction.contact) 
+                        continue;
 
-                        posRes_->resolve(interaction);
-                        momRes_->resolve(interaction);
-                    }
+                    interactions_.push_back(interaction);
+                    Diagnostic::renderInteraction(interaction);
+
+                    posRes_->resolve(interaction);
+                    momRes_->resolve(interaction);
                 }
             }
 
-            // Render entities
             for (const auto& e : entities_)
                 Diagnostic::renderEntity(*e);
 
-            // Dump diagnostics periodically
             if (cycleCount_ % 300 == 0)
                 Diagnostic::dumpHistory();
         }
@@ -612,14 +606,15 @@ namespace PhysicsSim {
 
     // --- Main Simulator ---
     class ArcadePhysicsSimulator {
-        std::unique_ptr<Simulation> sim_;
-        std::chrono::high_resolution_clock::time_point lastFrame_;
+        std::unique_ptr<Simulation> sim_;  // Initialized in-class below
+        std::chrono::high_resolution_clock::time_point lastFrame_ = std::chrono::high_resolution_clock::now();
         enum class State { Init, Running, Paused, Terminate };
         State state_ = State::Init;
 
     public:
-        ArcadePhysicsSimulator() 
-            : sim_(std::make_unique<Simulation>()), lastFrame_(std::chrono::high_resolution_clock::now()) {
+        ArcadePhysicsSimulator()
+            : state_(State::Init) {
+            sim_ = std::make_unique<Simulation>(); // In-class init fixed here
             setupScene();
             state_ = State::Running;
         }
@@ -628,7 +623,7 @@ namespace PhysicsSim {
             // Ground
             sim_->addEntity(std::make_unique<Entity>(
                 Vec2f{400, 50},
-                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::pair{800.f, 100.f}), // FIX: CTAD, don't specify template args
+                std::make_unique<Geometry<GeometryType::Quadrilateral>>(std::pair{800.f, 100.f}),
                 std::map<std::string, float, std::less<>>{
                     {"mass", 1.f},
                     {"bounce", 0.2f},
